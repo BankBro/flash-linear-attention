@@ -1,0 +1,13 @@
+defaults:
+  - config.yaml
+  - _self_
+
+expt_params:
+  feature_map: 'kan'  # 'relu' / 'sigmoid' / 'logsigmoid' / 'swish' / 'sqrelu' / 'gelu' / 'taylor2' / 'kan' / 'elu'
+  init_strategy: 'pure_linear'  # "pure_linear" or "linear_with_noise"
+  spline_basis_mode: 'original'  # 'detach' or 're_calculate' or 'original'
+  grad_amplifier: 5.0  # 1.0 or 5.0
+  lr_amplifier: False  # True or False
+  kan_loss_flag: False  # True or False
+  aux_loss_flag: False  # True or False
+  convex_concave_mode: null  # "convex"(凸函数) or "concave"(凹函数) or null

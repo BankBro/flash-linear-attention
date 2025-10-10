@@ -75,10 +75,10 @@ def chunk_local_cumsum_scalar_kernel(
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_local_cumsum_vector_kernel(
-    s,
-    o,
-    cu_seqlens,
-    chunk_indices,
+    s,  # BTHS
+    o,  # BTHS
+    cu_seqlens,  # [N+1]
+    chunk_indices,  # [NT,2]
     T,
     B: tl.constexpr,
     H: tl.constexpr,
@@ -94,7 +94,7 @@ def chunk_local_cumsum_vector_kernel(
     if IS_VARLEN:
         i_n, i_t = tl.load(chunk_indices + i_t * 2).to(tl.int32), tl.load(chunk_indices + i_t * 2 + 1).to(tl.int32)
         bos, eos = tl.load(cu_seqlens + i_n).to(tl.int32), tl.load(cu_seqlens + i_n + 1).to(tl.int32)
-        T = eos - bos
+        T = eos - bos  # 当前序列的实际长度
     else:
         bos, eos = i_b * T, i_b * T + T
 
@@ -109,6 +109,9 @@ def chunk_local_cumsum_vector_kernel(
         p_o = tl.make_block_ptr(o + (bos * H + i_h*T)*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
     else:
         p_s = tl.make_block_ptr(s + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+        #                       ^^^^^^^^^^^^^^^^^^^^^^^   ^^^^              ^^^^^^^^^^^^^^^^^^^
+        #                       ↓                         ↓                 偏移: 在特定的b和h下的逻辑形状下,不同的t和s所代表的块的逻辑位置
+        #                       基地址: 定位到特定b和h     逻辑形状: 站在不同的b和h的角度看到的t和s组成的形状
         p_o = tl.make_block_ptr(o + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
     # [BT, BS]
     b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
@@ -263,19 +266,19 @@ def chunk_local_cumsum_scalar(
 
 
 def chunk_local_cumsum_vector(
-    g: torch.Tensor,
-    chunk_size: int,
+    g: torch.Tensor,  # BTHS
+    chunk_size: int,  # 最大64最小16
     reverse: bool = False,
-    cu_seqlens: Optional[torch.Tensor] = None,
+    cu_seqlens: Optional[torch.Tensor] = None,  # [N+1]
     head_first: bool = False,
     output_dtype: Optional[torch.dtype] = torch.float
 ) -> torch.Tensor:
     if head_first:
         B, H, T, S = g.shape
     else:
-        B, T, H, S = g.shape
+        B, T, H, S = g.shape  # YES
     BT = chunk_size
-    chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size) if cu_seqlens is not None else None
+    chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size) if cu_seqlens is not None else None  # [NT,2]
     NT = triton.cdiv(T, BT) if cu_seqlens is None else len(chunk_indices)
     assert chunk_size == 2**(chunk_size.bit_length()-1), "chunk_size must be a power of 2"
 
@@ -385,10 +388,10 @@ def chunk_global_cumsum(
 
 @input_guard
 def chunk_local_cumsum(
-    g: torch.Tensor,
-    chunk_size: int,
+    g: torch.Tensor,  # BTHK
+    chunk_size: int,  # 最大64最小16
     reverse: bool = False,
-    cu_seqlens: Optional[torch.Tensor] = None,
+    cu_seqlens: Optional[torch.Tensor] = None,  # [N+1]
     head_first: bool = False,
     output_dtype: Optional[torch.dtype] = torch.float,
     **kwargs

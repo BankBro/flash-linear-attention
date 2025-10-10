@@ -1,0 +1,13 @@
+_target_: lightning.pytorch.loggers.WandbLogger
+
+entity: scu-mclab
+project: linear-attention-model
+name: ${expt_name}
+version: ${time}
+save_dir: ./logs/wandb/${expt_name}/${time}
+offline: True
+log_model: False
+prefix: ""
+job_type: "train"
+group: ""
+tags: []

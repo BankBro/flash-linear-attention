@@ -31,39 +31,39 @@ BKV_LIST = [32, 64] if check_shared_mem() else [16, 32]
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_fwd_kernel_h(
-    k,
-    v,
-    h,
-    g,
-    gk,
-    gv,
-    h0,
-    ht,
-    cu_seqlens,
-    split_offsets,
+    k,  # BTHK
+    v,  # BTHV
+    h,  # (B, NS, H, K, V)
+    g,  # None
+    gk,  # BTHK
+    gv,  # None
+    h0,  # None / NHKV
+    ht,  # None
+    cu_seqlens,  # [N+1]
+    split_offsets,  # [N+1]
     T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
-    BS: tl.constexpr,
+    BS: tl.constexpr,  # BS=BT
     BK: tl.constexpr,
     BV: tl.constexpr,
-    USE_G: tl.constexpr,
-    USE_GK: tl.constexpr,
-    USE_GV: tl.constexpr,
-    USE_INITIAL_STATE: tl.constexpr,
-    STORE_FINAL_STATE: tl.constexpr,
+    USE_G: tl.constexpr,  # False
+    USE_GK: tl.constexpr,  # True
+    USE_GV: tl.constexpr,  # False
+    USE_INITIAL_STATE: tl.constexpr,  # False
+    STORE_FINAL_STATE: tl.constexpr,  # False
     IS_VARLEN: tl.constexpr,
 ):
     i_k, i_v, i_nh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_n, i_h = i_nh // H, i_nh % H
     if IS_VARLEN:
         bos, eos = tl.load(cu_seqlens + i_n).to(tl.int32), tl.load(cu_seqlens + i_n + 1).to(tl.int32)
-        T = eos - bos
+        T = eos - bos  # 当前块所在序列的长度
         NT = tl.cdiv(T, BT)
         NS = tl.cdiv(T, BS)
-        boh = tl.load(split_offsets + i_n).to(tl.int32)
+        boh = tl.load(split_offsets + i_n).to(tl.int32)  # 序列开始时所在的大块
     else:
         bos, eos = i_n * T, i_n * T + T
         NT = tl.cdiv(T, BT)
@@ -90,7 +90,7 @@ def chunk_fwd_kernel_h(
         b_k = tl.load(p_k, boundary_check=(0, 1))
         # [BT, BV]
         b_v = tl.load(p_v, boundary_check=(0, 1))
-        last_idx = min((i_t + 1) * BT, T) - 1
+        last_idx = min((i_t + 1) * BT, T) - 1  # 当前处理的基本块中最后一个token在序列中的绝对位置
 
         # scalar decay
         if USE_G:
@@ -246,17 +246,17 @@ def chunk_bwd_kernel_dh(
 
 
 def chunk_fwd_h(
-    k: torch.Tensor,
-    v: torch.Tensor,
-    g: torch.Tensor,
-    gk: torch.Tensor,
-    gv: torch.Tensor,
-    h0: torch.Tensor,
+    k: torch.Tensor,  # BTHK
+    v: torch.Tensor,  # BTHV
+    g: torch.Tensor,  # None
+    gk: torch.Tensor,  # BTHK
+    gv: torch.Tensor,  # None
+    h0: torch.Tensor,  # None / NHKV
     output_final_state: bool,
-    cu_seqlens: Optional[torch.Tensor] = None,
+    cu_seqlens: Optional[torch.Tensor] = None,  # [N+1]
     chunk_size: int = 64,
-    split_size: Optional[int] = None,
-    states_in_fp32: bool = False
+    split_size: Optional[int] = None,  # None
+    states_in_fp32: bool = False  # False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     B, T, H, K, V = *k.shape, v.shape[-1]
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
@@ -266,7 +266,7 @@ def chunk_fwd_h(
     if cu_seqlens is None:
         N, NS, split_offsets = B, triton.cdiv(T, BS), None
     else:
-        split_offsets = prepare_chunk_offsets(cu_seqlens, BS)
+        split_offsets = prepare_chunk_offsets(cu_seqlens, BS)  # [N+1]
         N, NS = len(cu_seqlens) - 1, split_offsets[-1].item()
 
     h = k.new_empty(B, NS, H, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
@@ -293,7 +293,7 @@ def chunk_fwd_h(
         USE_GK=gk is not None,
         USE_GV=gv is not None,
     )
-    return h, ht
+    return h, ht  # (B, NS, H, K, V), None
 
 
 def chunk_bwd_dh(

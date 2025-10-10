@@ -1,0 +1,5 @@
+_target_: apex.optimizers.FusedAdam
+lr: 0.0008
+betas: [0.9, 0.95]
+adam_w_mode: true
+weight_decay: 0.1

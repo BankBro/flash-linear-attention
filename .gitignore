@@ -1,5 +1,6 @@
 # test file
 test.py
+test.ipynb
 
 # data files
 data
@@ -22,12 +23,14 @@ wandb
 *.csv
 *.png
 *.html
+checkpoints
 
 # log and config files
 log.*
 *.log
 *.cfg
 *.ini
+logs
 
 # pycache
 __pycache__
@@ -42,3 +45,6 @@ __pycache__
 
 # macOS
 .DS_Store
+
+# workspace
+*.code-workspace

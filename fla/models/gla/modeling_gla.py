@@ -65,7 +65,8 @@ class GLABlock(nn.Module):
                 norm_eps=config.norm_eps,
                 clamp_min=config.clamp_min,
                 fuse_norm=config.fuse_norm,
-                layer_idx=layer_idx
+                layer_idx=layer_idx,
+                config=config
             )
         self.mlp_norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
         self.mlp = GLAMLP(

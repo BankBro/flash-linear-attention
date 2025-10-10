@@ -1,0 +1,53 @@
+expt_name: gla_kan_154M_wikitext103  # change
+seed: 4321
+time: 2025-07-10_18-10-12
+description: "FLA with b-spline activation"  # change
+
+defaults:
+  - model: gla
+  - datamodule: wikitext103
+  - trainer: default
+  - loss_fn: cross_entropy
+  - optimizer: apex_FusedAdam
+  - lr_scheduler: timm_cosine
+  - logger: wandb
+  - callbacks: default
+  - _self_
+
+task_module:
+  _target_: train.task_module.seq_task.SeqTaskModule
+
+hydra:
+  run:
+    dir: ./logs/hydra/${expt_name}/${time}
+
+debug:
+  flag: True  # change
+  accumulate_grad_batches: 4
+  val_check_interval: 0.5
+  ids_num_train: 1000000
+  ids_num_val: 100000
+  ids_num_test: 100000
+
+calculate_params:
+  global_batch_size: null
+  dataset_train_sample_num: null
+  batches_per_epoch: null
+  total_batches: null
+  max_steps: null
+
+expt_params:
+  init_strategy: 'pure_linear'  # "pure_linear" or "linear_with_noise"
+  spline_basis_mode: 'original'  # 'detach' or 're_calculate' or 'original'
+  grad_amplifier: 1.0  # 1.0 or 5.0
+  lr_amplifier: False  # True or False
+  kan_loss_flag: False  # True or False
+  aux_loss_flag: False  # True or False
+
+# expt_params:
+#   init_strategy: 'pure_linear'  # "pure_linear" or "linear_with_noise"
+#   spline_basis_mode: 'detach'  # 'detach' or 're_calculate' or 'original'
+#   grad_amplifier: 1.0  # 1.0 or 5.0
+#   lr_amplifier: False  # True or False
+#   kan_loss_flag: False  # True or False
+#   aux_loss_flag: True  # True or False

@@ -1,0 +1,30 @@
+model_checkpoint:
+  _target_: lightning.pytorch.callbacks.ModelCheckpoint
+  monitor: val/loss
+  mode: min
+  save_top_k: 1
+  save_last: True
+  every_n_train_steps: null  # 不按训练步数保存, 只有在验证阶段（每个epoch结束）才考虑保存
+  dirpath: ./checkpoints/${expt_name}/${time}
+  filename: step_{step}-val_loss_{val/loss:.3f}
+  auto_insert_metric_name: False
+
+early_stopping:
+  _target_: lightning.pytorch.callbacks.EarlyStopping
+  monitor: "val/loss"
+  mode: "min"
+  patience: 5
+  min_delta: 0.01
+  check_on_train_epoch_end: False
+  # verbose: True
+
+learning_rate_monitor:
+  _target_: lightning.pytorch.callbacks.LearningRateMonitor
+  logging_interval: step
+
+training_progress:
+  _target_: train.callbacks.train_progress.TrainProgressCallback
+  log_frequency_ratio: 0.05  # 5%频率输出进度信息
+
+# rich_model_summary:
+#   _target_: lightning.pytorch.callbacks.RichModelSummary

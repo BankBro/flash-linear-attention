@@ -1,0 +1,5 @@
+_target_: train.test_model_dir.test_model_file.SimpleGPT
+d_model: 512
+nhead: 8
+num_layers: 6
+max_seq_length: ${datamodule.datamodule_cfg.max_length}

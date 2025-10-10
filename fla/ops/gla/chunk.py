@@ -31,12 +31,12 @@ BV_LIST = [64, 128] if check_shared_mem('ampere') else [16, 32]
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_gla_fwd_A_kernel_intra_sub_inter(
-    q,
-    k,
-    g,
-    A,
-    cu_seqlens,
-    chunk_indices,
+    q,  # BTHK
+    k,  # BTHK
+    g,  # BTHK
+    A,  # (B, T, H, BT)
+    cu_seqlens,  # [N+1]
+    chunk_indices,  # [N, 2]
     scale,
     T,
     H: tl.constexpr,
@@ -64,14 +64,14 @@ def chunk_gla_fwd_A_kernel_intra_sub_inter(
 
     b_A = tl.zeros([BC, BC], dtype=tl.float32)
     for i_k in range(tl.cdiv(K, BK)):
-        o_k = i_k * BK + tl.arange(0, BK)
-        m_k = o_k < K
+        o_k = i_k * BK + tl.arange(0, BK)  # [BK]
+        m_k = o_k < K  # [BK]
 
         p_q = tl.make_block_ptr(q + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
         p_g = tl.make_block_ptr(g + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
         p_k = tl.make_block_ptr(k + (bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
         p_gk = tl.make_block_ptr(g + (bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
-        p_gn = g + (bos + i_t * BT + i_i * BC) * H*K + i_h * K + o_k
+        p_gn = g + (bos + i_t * BT + i_i * BC) * H*K + i_h * K + o_k  # [BK]
 
         # [BK,]
         b_gn = tl.load(p_gn, mask=m_k, other=0)
@@ -104,12 +104,12 @@ def chunk_gla_fwd_A_kernel_intra_sub_inter(
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_gla_fwd_A_kernel_intra_sub_intra(
-    q,
-    k,
-    g,
-    A,
-    cu_seqlens,
-    chunk_indices,
+    q,  # BTHK
+    k,  # BTHK
+    g,  # BTHK
+    A,  # (B, T, H, BT)
+    cu_seqlens,  # [N+1]
+    chunk_indices,  # [N, 2]
     scale,
     T,
     H: tl.constexpr,
@@ -142,12 +142,12 @@ def chunk_gla_fwd_A_kernel_intra_sub_intra(
     p_k = k + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k
     p_gk = g + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k
 
-    b_q = tl.load(p_q, boundary_check=(0, 1))
-    b_g = tl.load(p_g, boundary_check=(0, 1))
+    b_q = tl.load(p_q, boundary_check=(0, 1))  # [BC, BK]
+    b_g = tl.load(p_g, boundary_check=(0, 1))  # [BC, BK]
     for j in range(0, min(BC, T - i_t * BT - i_i * BC)):
-        b_k = tl.load(p_k, mask=m_k, other=0).to(tl.float32)
-        b_gk = tl.load(p_gk, mask=m_k, other=0).to(tl.float32)
-        b_A = tl.sum(b_q * b_k[None, :] * exp(b_g - b_gk[None, :]), 1)
+        b_k = tl.load(p_k, mask=m_k, other=0).to(tl.float32)  # [BK]
+        b_gk = tl.load(p_gk, mask=m_k, other=0).to(tl.float32)  # [BK]
+        b_A = tl.sum(b_q * b_k[None, :] * exp(b_g - b_gk[None, :]), 1)  # [BC]
         b_A = tl.where(o_i >= j, b_A * scale, 0.)
 
         tl.store(A + o_A + j, b_A, mask=m_A)
@@ -717,30 +717,30 @@ def chunk_gla_bwd_kernel_inter(
 
 
 def chunk_gla_fwd_intra_gk(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    g: torch.Tensor,
+    q: torch.Tensor,  # BTHK
+    k: torch.Tensor,  # BTHK
+    g: torch.Tensor,  # BTHK
     scale: float,
-    cu_seqlens: Optional[torch.LongTensor] = None,
+    cu_seqlens: Optional[torch.LongTensor] = None,  # [N+1]
     chunk_size: int = 64
 ):
     B, T, H, K = k.shape
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
 
-    chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size) if cu_seqlens is not None else None
-    NT = triton.cdiv(T, BT) if cu_seqlens is None else len(chunk_indices)
+    chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size) if cu_seqlens is not None else None  # [N, 2]
+    NT = triton.cdiv(T, BT) if cu_seqlens is None else len(chunk_indices)  # N
     BC = min(16, BT)
     NC = triton.cdiv(BT, BC)
 
     A = q.new_empty(B, T, H, BT, dtype=torch.float)
     grid = (NT, NC * NC, B * H)
     chunk_gla_fwd_A_kernel_intra_sub_inter[grid](
-        q,
-        k,
-        g,
-        A,
-        cu_seqlens,
-        chunk_indices,
+        q,  # BTHK
+        k,  # BTHK
+        g,  # BTHK
+        A,  # (B, T, H, BT)
+        cu_seqlens,  # [N+1]
+        chunk_indices,  # [N, 2]
         scale,
         T=T,
         H=H,
@@ -755,12 +755,12 @@ def chunk_gla_fwd_intra_gk(
     if K <= 256:
         BK = triton.next_power_of_2(K)
         chunk_gla_fwd_A_kernel_intra_sub_intra[grid](
-            q,
-            k,
-            g,
-            A,
-            cu_seqlens,
-            chunk_indices,
+            q,  # BTHK
+            k,  # BTHK
+            g,  # BTHK
+            A,  # (B, T, H, BT)
+            cu_seqlens,  # [N+1]
+            chunk_indices,  # [N, 2]
             scale,
             T=T,
             H=H,
@@ -1005,21 +1005,21 @@ def chunk_gla_bwd_dqkg(
 
 
 def chunk_gla_fwd(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    g: torch.Tensor,
-    g_cumsum: Optional[torch.Tensor],
+    q: torch.Tensor,  # BTHK
+    k: torch.Tensor,  # BTHK
+    v: torch.Tensor,  # BTHV
+    g: torch.Tensor,  # BTHK
+    g_cumsum: Optional[torch.Tensor],  # None
     scale: float,
-    initial_state: torch.Tensor,
+    initial_state: torch.Tensor,  # None / NHKV
     output_final_state: bool,
-    cu_seqlens: Optional[torch.LongTensor] = None,
-    chunk_size: int = 64
+    cu_seqlens: Optional[torch.LongTensor] = None,  # [N+1]
+    chunk_size: int = 64  # 最大64最小16
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     T = q.shape[1]
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
     if g_cumsum is None:
-        g_cumsum = chunk_local_cumsum(g, BT, cu_seqlens=cu_seqlens)
+        g_cumsum = chunk_local_cumsum(g, BT, cu_seqlens=cu_seqlens)  # BTHK
 
     h, ht = chunk_fwd_h(
         k=k,
@@ -1037,11 +1037,11 @@ def chunk_gla_fwd(
     # the intra A is kept in fp32
     # the computation has very marginal effect on the entire throughput
     A = chunk_gla_fwd_intra_gk(
-        q=q,
-        k=k,
-        g=g_cumsum,
+        q=q,  # BTHK
+        k=k,  # BTHK
+        g=g_cumsum,  # BTHK
         scale=scale,
-        cu_seqlens=cu_seqlens,
+        cu_seqlens=cu_seqlens,  # [N+1]
         chunk_size=BT
     )
     o = chunk_gla_fwd_o_gk(
@@ -1155,17 +1155,17 @@ class ChunkGLAFunction(torch.autograd.Function):
     @input_guard
     def forward(
         ctx,
-        q,
-        k,
-        v,
-        g,
+        q,  # BTHK
+        k,  # BTHK
+        v,  # BTHV
+        g,  # BTHK
         scale,
-        initial_state,
+        initial_state,  # None / NHKV
         output_final_state,
-        cu_seqlens,
+        cu_seqlens,  # [N+1]
     ):
         T = q.shape[1]
-        chunk_size = min(64, max(16, triton.next_power_of_2(T)))
+        chunk_size = min(64, max(16, triton.next_power_of_2(T)))  # 最大64最小16
 
         g_cumsum, A, h, ht, o = chunk_gla_fwd(
             q=q,

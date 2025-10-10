@@ -1,0 +1,27 @@
+_target_: lightning.pytorch.Trainer
+
+num_nodes: 1
+devices: [0]  # change
+accelerator: gpu
+strategy: auto
+
+min_epochs: 1
+max_epochs: 10
+
+max_steps: 20000
+min_steps: null
+
+# 每{accumulate_grad_batches}次反向传播后进行一次参数更新
+accumulate_grad_batches: 128
+
+# 每{val_check_interval}个batches进行一次验证, 与{accumulate_grad_batches}无关
+val_check_interval: 0.1  # 小数表示每隔0.1个epoch进行一次验证
+# check_val_every_n_epoch: null
+
+precision: bf16-mixed
+gradient_clip_val: 1.0
+
+# 禁用进度条
+enable_progress_bar: false
+# enable_model_summary: true  # 保留模型摘要
+# log_every_n_steps: 1       # 每50步记录一次日志

@@ -1,0 +1,36 @@
+datamodule_cfg:
+  _target_: train.lm_datasets.lm_datamodule.LMDataModule
+
+  dataset_name: wikitext
+  dataset_config_name: wikitext-103-v1
+  tokenizer_name: gpt2
+  cache_dir: /home/lyj/.cache/huggingface/hub/datasets--Salesforce--wikitext  # change
+  max_length: 2048
+  add_eos: True
+  batch_size_per_gpu: 5  # change
+  batch_size_eval: 8  # change
+  num_workers: 64
+  shuffle: True
+
+ids_num_train: null
+ids_num_val: null
+ids_num_test: null
+
+sample_num_train: null
+sample_num_val: null
+sample_num_test: null
+
+# DatasetDict({
+#     test: Dataset({
+#         features: ['text'],
+#         num_rows: 4358
+#     })
+#     train: Dataset({
+#         features: ['text'],
+#         num_rows: 1801350
+#     })
+#     validation: Dataset({
+#         features: ['text'],
+#         num_rows: 3760
+#     })
+# })

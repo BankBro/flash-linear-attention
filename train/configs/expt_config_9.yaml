@@ -1,0 +1,11 @@
+defaults:
+  - config.yaml
+  - _self_
+
+expt_params:
+  init_strategy: 'pure_linear'  # "pure_linear" or "linear_with_noise"
+  grad_amplifier: 1.0  # 1.0 or 5.0
+  lr_amplifier: True  # True or False
+  spline_basis_mode: 're_calculate'  # 'detach' or 're_calculate' or 'original'
+  kan_loss_flag: True  # True or False
+  aux_loss_flag: False  # True or False

@@ -1,0 +1,14 @@
+_target_: swanlab.integration.pytorch_lightning.SwanLabLogger
+
+project: ${expt_name}
+experiment_name: ${time}
+workspace: "scu-mclab"
+
+tags: ["gla", "bspline", "version_${time}", "debug_${debug.flag}"]  # change
+description: ${description}
+version: ${time}
+
+logdir: "./logs/swanlab/${expt_name}/${time}"
+mode: cloud
+
+config: null

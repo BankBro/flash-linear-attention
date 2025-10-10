@@ -1,0 +1,12 @@
+timm_cosine:
+  # 学习率: warmup_lr_init ---(warmup阶段)---> lr (optimezer中) ---(主训练阶段)---> lr_min
+  _target_: train.lr_scheduler.timm_cosine.TimmCosineLRScheduler
+  lr_min: 0.00008  # 最小学习率, 最大学习率在optimizer中设置
+  warmup_t: 0.03  # warmup阶段的步数, 会在程序中调整为整数
+  t_initial: 0.97  # 从warmup结束后到学习率降到lr_min所需的训练步数, 会在程序中调整为整数
+  t_in_epochs: false  # 学习率调度器会基于每一步step来调整学习率
+  warmup_prefix: true  #  warmup只在训练初期生效一次, 后续调度不会再次触发它
+  warmup_lr_init: 0.000001  # warmup阶段的初始学习率, 需要小于optimizer中的lr
+
+scheduler_interval: step
+scheduler_monitor: val/loss
