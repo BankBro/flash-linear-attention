@@ -16,7 +16,7 @@ from fla.modules import FusedRMSNormGated, RMSNorm, ShortConvolution
 from fla.modules.activations import ACT2FN
 from fla.ops.gla import chunk_gla, fused_chunk_gla, fused_recurrent_gla
 
-from fla.modules.kan_activation import KANActivation, RangeTracker
+# from fla.modules.kan_activation import KANActivation, RangeTracker
 from fla.modules.feature_map import TaylorFeatureMap
 
 if TYPE_CHECKING:
@@ -106,10 +106,11 @@ class GatedLinearAttention(nn.Module):
         self.num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
         self.num_kv_groups = self.num_heads // self.num_kv_heads
 
-        self.feature_map = self.config.task_cfg.expt_params.get('feature_map', None)
-        # self.feature_map_fn = ACT2FN[feature_map] if feature_map is not None else None
-        self.feature_map_fn = self._get_feature_map_fn()
-        self.use_kan_activation = True if self.feature_map == 'kan' else False
+        self.feature_map = feature_map
+        self.feature_map_fn = ACT2FN[feature_map] if feature_map is not None else None
+        # self.feature_map = self.config.task_cfg.expt_params.get('feature_map', None)
+        # self.feature_map_fn = self._get_feature_map_fn()
+        # self.use_kan_activation = True if self.feature_map == 'kan' else False
 
         self.use_short_conv = use_short_conv
         self.conv_size = conv_size
@@ -164,38 +165,38 @@ class GatedLinearAttention(nn.Module):
 
         self.gate_logit_normalizer = gate_logit_normalizer
 
-        self.range_tracker = RangeTracker(self.layer_idx, self.config)
-        self.q_kan_activation = KANActivation(self.config)
-        self.k_kan_activation = KANActivation(self.config)
+        # self.range_tracker = RangeTracker(self.layer_idx, self.config)
+        # self.q_kan_activation = KANActivation(self.config)
+        # self.k_kan_activation = KANActivation(self.config)
     
-        # 设置KAN激活函数到RangeTracker中
-        self.range_tracker.set_kan_activations(
-            kan_q=self.q_kan_activation, 
-            kan_k=self.k_kan_activation
-        )
+        # # 设置KAN激活函数到RangeTracker中
+        # self.range_tracker.set_kan_activations(
+        #     kan_q=self.q_kan_activation, 
+        #     kan_k=self.k_kan_activation
+        # )
     
-    def _get_feature_map_fn(self):
-        if self.feature_map == 'taylor2':
-            return TaylorFeatureMap(16)
+    # def _get_feature_map_fn(self):
+    #     if self.feature_map == 'taylor2':
+    #         return TaylorFeatureMap(16)
 
-        elif self.feature_map == 'kan':
-            return None
+    #     elif self.feature_map == 'kan':
+    #         return None
 
-        elif self.feature_map == 'elu':
-            return lambda x: F.elu(x) + 1.0
+    #     elif self.feature_map == 'elu':
+    #         return lambda x: F.elu(x) + 1.0
 
-        elif self.feature_map in ['relu', 'sigmoid', 'logsigmoid', 'swish', 'sqrelu', 'gelu']:
-            return ACT2FN[self.feature_map]
+    #     elif self.feature_map in ['relu', 'sigmoid', 'logsigmoid', 'swish', 'sqrelu', 'gelu']:
+    #         return ACT2FN[self.feature_map]
 
-        else:
-            raise ValueError(f"Unsupported feature map: {self.feature_map}. "
-                             "Supported feature maps are: 'taylor2', 'kan', 'elu', 'relu', 'sigmoid', "
-                             "'logsigmoid', 'swish', 'sqrelu', 'gelu'.")
+    #     else:
+    #         raise ValueError(f"Unsupported feature map: {self.feature_map}. "
+    #                          "Supported feature maps are: 'taylor2', 'kan', 'elu', 'relu', 'sigmoid', "
+    #                          "'logsigmoid', 'swish', 'sqrelu', 'gelu'.")
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,  # BS
+        attention_mask: Optional[torch.Tensor] = None,  # BS, 训练时为None
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
@@ -251,14 +252,14 @@ class GatedLinearAttention(nn.Module):
         if self.feature_map_fn is not None:
             q, k = map(self.feature_map_fn, (q, k))
 
-        if self.use_kan_activation:
-            # print('use_kan_activation')
-            # 先更新RangeTracker（在KAN激活之前）
-            # self.range_tracker.update(q, k)
-            
-            # KAN activation
-            q = self.q_kan_activation(q)
-            k = self.k_kan_activation(k)
+        # if self.use_kan_activation:
+        #     # print('use_kan_activation')
+        #     # 先更新RangeTracker（在KAN激活之前）
+        #     # self.range_tracker.update(q, k)
+        #     
+        #     # KAN activation
+        #     q = self.q_kan_activation(q)
+        #     k = self.k_kan_activation(k)
 
         q = rearrange(q, '... (h d) -> ... h d', d=self.head_k_dim)
         if self.num_kv_groups > 1:
