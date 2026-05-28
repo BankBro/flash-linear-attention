@@ -806,7 +806,8 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_kblocked(
             b_w = tl.load(p_w, boundary_check=(0, 1))
             if USE_G:
                 b_q = b_q * b_g_exp[None, :]
-            b_state += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype), input_precision="ieee") * scale - tl.dot(b_w, b_dv.to(b_w.dtype), input_precision="ieee")
+            b_state += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype), input_precision="ieee") * \
+                scale - tl.dot(b_w, b_dv.to(b_w.dtype), input_precision="ieee")
             tl.store(p_state, b_state, boundary_check=(0, 1))
 
     if USE_INITIAL_STATE:

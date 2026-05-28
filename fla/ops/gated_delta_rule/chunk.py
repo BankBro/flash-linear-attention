@@ -238,7 +238,6 @@ def chunk_gated_delta_rule_bwd(
     return dq, dk, dv, db, dg, dh0, dA_log, ddt_bias
 
 
-
 class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
 
     @staticmethod
