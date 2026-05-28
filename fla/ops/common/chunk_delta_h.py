@@ -596,6 +596,245 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
             tl.store(p_dh3, b_dh4.to(p_dh3.dtype.element_ty), boundary_check=(0, 1))
 
 
+@triton.jit(do_not_specialize=['T'])
+def chunk_gated_delta_rule_fwd_kernel_h_kblocked(
+    k,
+    v,
+    w,
+    v_new,
+    g,
+    h,
+    h0,
+    ht,
+    state,
+    T,
+    H: tl.constexpr,
+    HV: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BT: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
+    USE_G: tl.constexpr,
+    USE_INITIAL_STATE: tl.constexpr,
+    STORE_FINAL_STATE: tl.constexpr,
+    SAVE_NEW_VALUE: tl.constexpr,
+):
+    i_v, i_nh = tl.program_id(0), tl.program_id(1)
+    i_n, i_h = i_nh // HV, i_nh % HV
+    bos = i_n * T
+    NT = tl.cdiv(T, BT)
+
+    h += (i_n * NT * HV + i_h).to(tl.int64) * K*V
+    v += (bos * HV + i_h).to(tl.int64) * V
+    k += (bos * H + i_h // (HV // H)).to(tl.int64) * K
+    w += (bos * HV + i_h).to(tl.int64) * K
+    state += i_nh.to(tl.int64) * K*V
+    if SAVE_NEW_VALUE:
+        v_new += (bos * HV + i_h).to(tl.int64) * V
+    if USE_INITIAL_STATE:
+        h0 += i_nh.to(tl.int64) * K*V
+    if STORE_FINAL_STATE:
+        ht += i_nh.to(tl.int64) * K*V
+
+    for i_k in range(tl.cdiv(K, BK)):
+        p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+        if USE_INITIAL_STATE:
+            p_h0 = tl.make_block_ptr(h0, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            b_state = tl.load(p_h0, boundary_check=(0, 1)).to(tl.float32)
+        else:
+            b_state = tl.zeros([BK, BV], dtype=tl.float32)
+        tl.store(p_state, b_state, boundary_check=(0, 1))
+
+    for i_t in range(NT):
+        p_v = tl.make_block_ptr(v, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        b_v = tl.load(p_v, boundary_check=(0, 1)).to(tl.float32)
+
+        for i_k in range(tl.cdiv(K, BK)):
+            p_w = tl.make_block_ptr(w, (T, K), (HV*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+            p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            b_w = tl.load(p_w, boundary_check=(0, 1))
+            b_state = tl.load(p_state, boundary_check=(0, 1)).to(tl.float32)
+            b_v -= tl.dot(b_w, b_state.to(b_w.dtype), input_precision="ieee")
+
+        if SAVE_NEW_VALUE:
+            p_v_new = tl.make_block_ptr(v_new, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            tl.store(p_v_new, b_v.to(p_v_new.dtype.element_ty), boundary_check=(0, 1))
+
+        if USE_G:
+            last_idx = min((i_t + 1) * BT, T) - 1
+            m_t = (i_t * BT + tl.arange(0, BT)) < T
+            b_g_last = tl.load(g + (bos + last_idx) * HV + i_h).to(tl.float32)
+            p_g = tl.make_block_ptr(g + bos * HV + i_h, (T,), (HV,), (i_t * BT,), (BT,), (0,))
+            b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+            b_v_update = b_v * tl.where(m_t, exp2(b_g_last - b_g), 0)[:, None]
+            b_state_scale = exp2(b_g_last)
+        else:
+            b_v_update = b_v
+            b_state_scale = 1.0
+        b_v_update = b_v_update.to(k.dtype.element_ty)
+
+        i_t_int64 = i_t.to(tl.int64)
+        for i_k in range(tl.cdiv(K, BK)):
+            p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            p_h = tl.make_block_ptr(
+                h + i_t_int64 * HV*K*V,
+                (K, V),
+                (V, 1),
+                (i_k * BK, i_v * BV),
+                (BK, BV),
+                (1, 0),
+            )
+            b_state = tl.load(p_state, boundary_check=(0, 1)).to(tl.float32)
+            tl.store(p_h, b_state.to(p_h.dtype.element_ty), boundary_check=(0, 1))
+            b_state *= b_state_scale
+
+            p_k = tl.make_block_ptr(k, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            b_k = tl.load(p_k, boundary_check=(0, 1))
+            b_state += tl.dot(b_k, b_v_update, input_precision="ieee")
+            tl.store(p_state, b_state, boundary_check=(0, 1))
+
+    if STORE_FINAL_STATE:
+        for i_k in range(tl.cdiv(K, BK)):
+            p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            p_ht = tl.make_block_ptr(ht, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            b_state = tl.load(p_state, boundary_check=(0, 1)).to(tl.float32)
+            tl.store(p_ht, b_state, boundary_check=(0, 1))
+
+
+@triton.jit(do_not_specialize=['T'])
+def chunk_gated_delta_rule_bwd_kernel_dhu_kblocked(
+    q,
+    k,
+    w,
+    g,
+    dht,
+    dh0,
+    do,
+    dh,
+    dv,
+    dv2,
+    state,
+    scale,
+    T,
+    H: tl.constexpr,
+    HV: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BT: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
+    USE_G: tl.constexpr,
+    USE_INITIAL_STATE: tl.constexpr,
+    USE_FINAL_STATE_GRADIENT: tl.constexpr,
+):
+    i_v, i_nh = tl.program_id(0), tl.program_id(1)
+    i_n, i_h = i_nh // HV, i_nh % HV
+    bos = i_n * T
+    NT = tl.cdiv(T, BT)
+
+    q += (bos * H + i_h // (HV // H)).to(tl.int64) * K
+    k += (bos * H + i_h // (HV // H)).to(tl.int64) * K
+    w += (bos * HV + i_h).to(tl.int64) * K
+    do += (bos * HV + i_h).to(tl.int64) * V
+    dv += (bos * HV + i_h).to(tl.int64) * V
+    dv2 += (bos * HV + i_h).to(tl.int64) * V
+    dh += (i_n * NT * HV + i_h).to(tl.int64) * K*V
+    state += i_nh.to(tl.int64) * K*V
+    if USE_INITIAL_STATE:
+        dh0 += i_nh.to(tl.int64) * K*V
+    if USE_FINAL_STATE_GRADIENT:
+        dht += i_nh.to(tl.int64) * K*V
+
+    for i_k in range(tl.cdiv(K, BK)):
+        p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+        if USE_FINAL_STATE_GRADIENT:
+            p_dht = tl.make_block_ptr(dht, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            b_state = tl.load(p_dht, boundary_check=(0, 1)).to(tl.float32)
+        else:
+            b_state = tl.zeros([BK, BV], dtype=tl.float32)
+        tl.store(p_state, b_state, boundary_check=(0, 1))
+
+    for i_t in range(NT - 1, -1, -1):
+        i_t_int64 = i_t.to(tl.int64)
+        b_dv = tl.zeros([BT, BV], dtype=tl.float32)
+
+        for i_k in range(tl.cdiv(K, BK)):
+            p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+            p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            b_k = tl.load(p_k, boundary_check=(0, 1))
+            b_state = tl.load(p_state, boundary_check=(0, 1)).to(tl.float32)
+            b_dv += tl.dot(b_k, b_state.to(b_k.dtype), input_precision="ieee")
+
+        if USE_G:
+            last_idx = min((i_t + 1) * BT, T) - 1
+            m_t = (i_t * BT + tl.arange(0, BT)) < T
+            bg_last = tl.load(g + (bos + last_idx) * HV + i_h).to(tl.float32)
+            p_g = tl.make_block_ptr(g + bos * HV + i_h, (T,), (HV,), (i_t * BT,), (BT,), (0,))
+            b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+            b_dv *= tl.where(m_t, exp2(bg_last - b_g), 0)[:, None]
+            b_state_scale = exp2(bg_last)
+            b_g_exp = exp2(b_g)
+        else:
+            b_state_scale = 1.0
+            b_g_exp = tl.full([BT], 1.0, dtype=tl.float32)
+
+        p_dv = tl.make_block_ptr(dv, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        p_dv2 = tl.make_block_ptr(dv2, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        p_do = tl.make_block_ptr(do, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        b_dv += tl.load(p_dv, boundary_check=(0, 1))
+        b_do = tl.load(p_do, boundary_check=(0, 1))
+        tl.store(p_dv2, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
+
+        for i_k in range(tl.cdiv(K, BK)):
+            p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            p_dh = tl.make_block_ptr(
+                dh + i_t_int64 * HV*K*V,
+                (K, V),
+                (V, 1),
+                (i_k * BK, i_v * BV),
+                (BK, BV),
+                (1, 0),
+            )
+            b_state = tl.load(p_state, boundary_check=(0, 1)).to(tl.float32)
+            tl.store(p_dh, b_state.to(p_dh.dtype.element_ty), boundary_check=(0, 1))
+            b_state *= b_state_scale
+
+            p_q = tl.make_block_ptr(q, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            p_w = tl.make_block_ptr(w, (K, T), (1, HV*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            b_q = tl.load(p_q, boundary_check=(0, 1))
+            b_w = tl.load(p_w, boundary_check=(0, 1))
+            if USE_G:
+                b_q = b_q * b_g_exp[None, :]
+            b_state += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype), input_precision="ieee") * scale - tl.dot(b_w, b_dv.to(b_w.dtype), input_precision="ieee")
+            tl.store(p_state, b_state, boundary_check=(0, 1))
+
+    if USE_INITIAL_STATE:
+        for i_k in range(tl.cdiv(K, BK)):
+            p_state = tl.make_block_ptr(state, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            p_dh0 = tl.make_block_ptr(dh0, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+            b_state = tl.load(p_state, boundary_check=(0, 1)).to(tl.float32)
+            tl.store(p_dh0, b_state, boundary_check=(0, 1))
+
+
+def _raise_if_unsupported_large_k_phase_a(
+    K: int,
+    *,
+    state_v_first: bool,
+    gk: torch.Tensor | None = None,
+    cu_seqlens: torch.LongTensor | None = None,
+    chunk_indices: torch.LongTensor | None = None,
+):
+    if K <= 256:
+        return
+    if state_v_first:
+        raise NotImplementedError("K>256 Phase A chunk_delta_h path supports state_v_first=False only.")
+    if gk is not None:
+        raise NotImplementedError("K>256 Phase A chunk_delta_h path does not support gk yet.")
+    if cu_seqlens is not None or chunk_indices is not None:
+        raise NotImplementedError("K>256 Phase A chunk_delta_h path supports equal-length batches only.")
+
+
 @dispatch('common')
 def chunk_gated_delta_rule_fwd_h(
     k: torch.Tensor,
@@ -622,7 +861,13 @@ def chunk_gated_delta_rule_fwd_h(
         N, NT, chunk_offsets = B, triton.cdiv(T, BT), None
     else:
         N, NT, chunk_offsets = len(cu_seqlens) - 1, len(chunk_indices), prepare_chunk_offsets(cu_seqlens, BT)
-    assert K <= 256, "current kernel does not support head dimension larger than 256."
+    _raise_if_unsupported_large_k_phase_a(
+        K,
+        state_v_first=state_v_first,
+        gk=gk,
+        cu_seqlens=cu_seqlens,
+        chunk_indices=chunk_indices,
+    )
 
     if state_v_first:
         h = k.new_empty(B, NT, HV, V, K)
@@ -632,6 +877,37 @@ def chunk_gated_delta_rule_fwd_h(
         final_state = k.new_zeros(N, HV, K, V, dtype=torch.float32) if output_final_state else None
 
     v_new = torch.empty_like(u) if save_new_value else None
+    if K > 256:
+        BK, BV = 64, 32
+        state = torch.empty(N, HV, K, V, dtype=torch.float32, device=k.device)
+        def grid(meta): return (triton.cdiv(V, meta['BV']), N*HV)
+        chunk_gated_delta_rule_fwd_kernel_h_kblocked[grid](
+            k=k,
+            v=u,
+            w=w,
+            v_new=v_new,
+            g=g,
+            h=h,
+            h0=initial_state,
+            ht=final_state,
+            state=state,
+            T=T,
+            H=H,
+            HV=HV,
+            K=K,
+            V=V,
+            BT=BT,
+            BK=BK,
+            BV=BV,
+            USE_G=g is not None,
+            USE_INITIAL_STATE=initial_state is not None,
+            STORE_FINAL_STATE=final_state is not None,
+            SAVE_NEW_VALUE=v_new is not None,
+            num_warps=4,
+            num_stages=3,
+        )
+        return h, v_new, final_state
+
     def grid(meta): return (triton.cdiv(V, meta['BV']), N*HV)
     chunk_gated_delta_rule_fwd_kernel_h_blockdim64[grid](
         k=k,
@@ -675,7 +951,13 @@ def chunk_gated_delta_rule_bwd_dhu(
     B, T, H, K, V, HV = *q.shape, do.shape[-1], do.shape[2]
     # N: the actual number of sequences in the batch with either equal or variable lengths
     BT = chunk_size
-    assert K <= 256, "current kernel does not support head dimension being larger than 256."
+    _raise_if_unsupported_large_k_phase_a(
+        K,
+        state_v_first=state_v_first,
+        gk=gk,
+        cu_seqlens=cu_seqlens,
+        chunk_indices=chunk_indices,
+    )
 
     if chunk_indices is None and cu_seqlens is not None:
         chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size)
@@ -690,6 +972,41 @@ def chunk_gated_delta_rule_bwd_dhu(
         dh = q.new_empty(B, NT, HV, K, V)
     dh0 = torch.empty_like(h0, dtype=torch.float32) if h0 is not None else None
     dv2 = torch.empty_like(dv)
+
+    if K > 256:
+        if scale is None:
+            scale = K ** -0.5
+        BK, BV = 64, 32
+        state = torch.empty(N, HV, K, V, dtype=torch.float32, device=q.device)
+        def grid(meta): return (triton.cdiv(V, meta['BV']), N*HV)
+        chunk_gated_delta_rule_bwd_kernel_dhu_kblocked[grid](
+            q=q,
+            k=k,
+            w=w,
+            g=g,
+            dht=dht,
+            dh0=dh0,
+            do=do,
+            dh=dh,
+            dv=dv,
+            dv2=dv2,
+            state=state,
+            scale=scale,
+            T=T,
+            H=H,
+            HV=HV,
+            K=K,
+            V=V,
+            BT=BT,
+            BK=BK,
+            BV=BV,
+            USE_G=g is not None,
+            USE_INITIAL_STATE=dh0 is not None,
+            USE_FINAL_STATE_GRADIENT=dht is not None,
+            num_warps=4,
+            num_stages=2,
+        )
+        return dh, dh0, dv2
 
     def grid(meta): return (triton.cdiv(V, meta['BV']), N*HV)
     chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64[grid](

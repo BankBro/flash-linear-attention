@@ -238,6 +238,7 @@ def chunk_gated_delta_rule_bwd(
     return dq, dk, dv, db, dg, dh0, dA_log, ddt_bias
 
 
+
 class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
 
     @staticmethod
@@ -543,6 +544,13 @@ def chunk_gated_delta_rule(
 
     if scale is None:
         scale = k.shape[-1] ** -0.5
+
+    if k.shape[-1] > 256:
+        if state_v_first:
+            raise NotImplementedError("K>256 Phase A chunk_gated_delta_rule supports state_v_first=False only.")
+        if cu_seqlens is not None or cp_context is not None:
+            raise NotImplementedError("K>256 Phase A chunk_gated_delta_rule supports equal-length non-CP batches only.")
+
     o, final_state = ChunkGatedDeltaRuleFunction.apply(
         q,
         k,
